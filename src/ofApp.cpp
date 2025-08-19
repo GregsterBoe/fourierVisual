@@ -38,7 +38,7 @@ void ofApp::setup() {
     visualParams.primaryColor = ofColor::cyan;
     visualParams.secondaryColor = ofColor::magenta;
     visualParams.scale = 1.0f;
-    visualParams.smoothing = 0.1f;
+    visualParams.smoothing = 0.001f;
     visualParams.sensitivity = 1.0f;
     visualParams.showLabels = true;
 
@@ -171,7 +171,7 @@ void ofApp::draw() {
 
     // Draw the visualizer
     if (visualizer) {
-        visualizer->draw();
+        visualizer->draw(currentFeatures);
     }
 
     // Draw controls

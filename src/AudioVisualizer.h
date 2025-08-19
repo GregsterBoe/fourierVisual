@@ -23,7 +23,7 @@ struct VisualizationParams {
     ofColor primaryColor = ofColor::white;
     ofColor secondaryColor = ofColor::gray;
     float scale = 1.0f;
-    float smoothing = 0.1f;
+    float smoothing = 0.0001f;
     bool showLabels = true;
     float sensitivity = 1.0f;
 };
@@ -38,7 +38,7 @@ public:
     void setParams(const VisualizationParams& params) { visualParams = params; }
     void update(const AudioFeatures& features, const std::vector<float>& leftChannel = {},
         const std::vector<float>& rightChannel = {});
-    void draw();
+    void draw(AudioFeatures& features);
 
     // Mode management
     VisualizationMode getCurrentMode() const { return currentMode; }
@@ -61,6 +61,7 @@ private:
     int sampleRate;
     int bufferSize;
     bool autoScale = true;
+    int defaultScale = 20;
 
     // Visualization-specific data
     std::vector<Wave> waves;
@@ -70,6 +71,8 @@ private:
 
     // Smoothed values for visual stability
     float smoothedRMS = 0.0f;
+    float leftRMS = 0.0f;
+    float rightRMS = 0.0f;
     float smoothedCentroid = 0.0f;
     std::vector<float> smoothedSpectrum;
 
@@ -79,7 +82,7 @@ private:
     ofColor currentColor;
 
     // Mode-specific drawing functions
-    void drawWaveRMS(const AudioFeatures& features, const std::vector<float>& leftChannel, const std::vector<float>& rightChannel);
+    void drawWaveRMS();
     void drawSpectrumBars(const AudioFeatures& features);
     void drawCircularSpectrum(const AudioFeatures& features);
     void drawPeakPulses(const AudioFeatures& features);

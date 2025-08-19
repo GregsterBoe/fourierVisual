@@ -67,7 +67,7 @@ void AudioVisualizer::update(const AudioFeatures& features,
     }
 }
 
-void AudioVisualizer::draw() {
+void AudioVisualizer::draw(AudioFeatures& features) {
     ofPushMatrix();
     ofTranslate(visualParams.position);
     ofScale(visualParams.scale);
@@ -80,9 +80,11 @@ void AudioVisualizer::draw() {
     AudioFeatures dummyFeatures; // In real use, this comes from update()
     std::vector<float> dummyLeft, dummyRight;
 
+
+
     switch (currentMode) {
     case VisualizationMode::WAVE_RMS:
-        drawWaveRMS(dummyFeatures, dummyLeft, dummyRight);
+        drawWaveRMS();
         break;
     case VisualizationMode::SPECTRUM_BARS:
         drawSpectrumBars(dummyFeatures);
@@ -116,9 +118,7 @@ void AudioVisualizer::draw() {
     ofPopMatrix();
 }
 
-void AudioVisualizer::drawWaveRMS(const AudioFeatures& features,
-    const std::vector<float>& leftChannel,
-    const std::vector<float>& rightChannel) {
+void AudioVisualizer::drawWaveRMS() {
     if (waves.empty()) return;
 
     ofPushStyle();
@@ -127,8 +127,8 @@ void AudioVisualizer::drawWaveRMS(const AudioFeatures& features,
     ofSetColor(visualParams.primaryColor, 200);
     ofPushMatrix();
     ofTranslate(0, visualParams.size.y * 0.25f);
-    waves[0].setAmplitude(smoothedRMS * visualParams.sensitivity * 100);
-    waves[0].draw();
+    waves[0].setAmplitude(leftRMS * visualParams.sensitivity);
+    waves[0].draw(0, 0, defaultScale * 2, defaultScale);
     ofPopMatrix();
 
     // Draw right channel in secondary color
@@ -136,8 +136,8 @@ void AudioVisualizer::drawWaveRMS(const AudioFeatures& features,
         ofSetColor(visualParams.secondaryColor, 200);
         ofPushMatrix();
         ofTranslate(0, visualParams.size.y * 0.75f);
-        waves[1].setAmplitude(smoothedRMS * visualParams.sensitivity * 100);
-        waves[1].draw();
+        waves[1].setAmplitude(rightRMS * visualParams.sensitivity);
+        waves[1].draw(0,0, defaultScale * 2, defaultScale);
         ofPopMatrix();
     }
 
@@ -344,6 +344,9 @@ void AudioVisualizer::updateSmoothing(const AudioFeatures& features) {
 
     // Smooth RMS
     smoothedRMS = smoothedRMS * (1.0f - factor) + features.leftRMS * factor;
+    leftRMS = leftRMS * (1.0f - factor) + features.leftRMS * factor;
+    rightRMS = rightRMS * (1.0f - factor) + features.rightRMS * factor;
+
 
     // Smooth spectral centroid
     smoothedCentroid = smoothedCentroid * (1.0f - factor) + features.spectralCentroid * factor;
