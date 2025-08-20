@@ -1,4 +1,4 @@
-#pragma once
+#pragma o*nce
 #include "ofMain.h"
 #include "AudioAnalyzer.h"
 #include "Wave.h"
@@ -7,13 +7,12 @@
 #include <map>
 
 enum class VisualizationMode {
-    WAVE_RMS,           // Classic wave with RMS amplitude
+    WAVE_RMS,           // Raw waveform display
     SPECTRUM_BARS,      // FFT spectrum as bars
     CIRCULAR_SPECTRUM,  // FFT spectrum in circular form
     PEAK_PULSES,        // Visual pulses on peak detection
     CENTROID_WAVE,      // Wave colored by spectral centroid
     ONSET_PARTICLES,    // Particle system triggered by onsets
-    WAVEFORM_RAW,       // Raw waveform display
     COMBINED_VIEW       // Multiple visualizations combined
 };
 
@@ -36,9 +35,11 @@ public:
     void setup(int sampleRate, int bufferSize);
     void setMode(VisualizationMode mode);
     void setParams(const VisualizationParams& params) { visualParams = params; }
+
+    // Clean separation: update processes all data, draw only renders
     void update(const AudioFeatures& features, const std::vector<float>& leftChannel = {},
         const std::vector<float>& rightChannel = {});
-    void draw(AudioFeatures& features);
+    void draw(); // No parameters needed - all data is processed internally
 
     // Mode management
     VisualizationMode getCurrentMode() const { return currentMode; }
@@ -65,40 +66,73 @@ private:
 
     // Visualization-specific data
     std::vector<Wave> waves;
-    std::vector<float> spectrumHistory;
-    std::vector<glm::vec2> particles;
-    std::vector<float> particleLifetimes;
 
-    // Smoothed values for visual stability
+    // ALL processed visualization data (similar to smoothedRMS)
+    // RMS data
     float smoothedRMS = 0.0f;
     float leftRMS = 0.0f;
     float rightRMS = 0.0f;
-    float smoothedCentroid = 0.0f;
+
+    // Spectrum data (processed and ready for rendering)
     std::vector<float> smoothedSpectrum;
+    std::vector<float> spectrumBars;           // Processed spectrum for bar visualization
+    std::vector<glm::vec2> circularSpectrum;  // Polar coordinates for circular spectrum
+
+    // Peak and onset data
+    float pulseIntensity = 0.0f;
+    bool currentPeakDetected = false;
+    bool currentOnsetDetected = false;
+
+    // Centroid data
+    float smoothedCentroid = 0.0f;
+    float normalizedCentroid = 0.0f;  // Mapped to 0-1 range for color mapping
+
+    // Particle system data
+    std::vector<glm::vec2> particles;
+    std::vector<float> particleLifetimes;
+    std::vector<ofColor> particleColors;
+
+    // Waveform data (processed and downsampled for rendering)
+    std::vector<float> processedLeftChannel;
+    std::vector<float> processedRightChannel;
 
     // Visual state
-    float pulseIntensity = 0.0f;
     float rotationAngle = 0.0f;
     ofColor currentColor;
+    ofColor centroidColor;
 
-    // Mode-specific drawing functions
-    void drawWaveRMS();
-    void drawSpectrumBars(const AudioFeatures& features);
-    void drawCircularSpectrum(const AudioFeatures& features);
-    void drawPeakPulses(const AudioFeatures& features);
-    void drawCentroidWave(const AudioFeatures& features, const std::vector<float>& leftChannel);
-    void drawOnsetParticles(const AudioFeatures& features);
-    void drawRawWaveform(const std::vector<float>& leftChannel, const std::vector<float>& rightChannel);
-    void drawCombinedView(const AudioFeatures& features, const std::vector<float>& leftChannel, const std::vector<float>& rightChannel);
+    // History management
+    static const int HISTORY_SIZE = 256;
+    std::vector<float> spectrumHistory;
+
+    // Update methods - all data processing happens here
+    void updateRMSValues(const AudioFeatures& features);
+    void updateSpectrumData(const AudioFeatures& features);
+    void updatePeakData(const AudioFeatures& features);
+    void updateOnsetData(const AudioFeatures& features);
+    void updateCentroidData(const AudioFeatures& features);
+    void updateParticles(bool addNew = false);
+    void updateVisualState();
+    void updateWaveformData(const std::vector<float>& leftChannel,
+        const std::vector<float>& rightChannel);
+
+    // Drawing methods - only rendering, no data processing
+    void drawWaveformRMS();
+    void drawSpectrumBars();
+    void drawCircularSpectrum();
+    void drawPeakPulses();
+    void drawCentroidWave();
+    void drawOnsetParticles();
+    void drawCombinedView();
 
     // Helper functions
-    void updateParticles(bool addNew = false);
-    void updateSmoothing(const AudioFeatures& features);
     ofColor getColorFromFrequency(float frequency);
     ofColor getColorFromAmplitude(float amplitude);
     void drawLabel(const std::string& text, glm::vec2 position);
-
-    // History management for certain visualizations
-    static const int HISTORY_SIZE = 256;
     void addToHistory(float value, std::vector<float>& history);
+
+    // Data processing helpers
+    std::vector<float> downsampleForVisualization(const std::vector<float>& input, int targetSize);
+    void smoothValue(float& target, float newValue, float smoothing);
+    glm::vec2 polarToCartesian(float radius, float angle);
 };

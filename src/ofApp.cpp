@@ -33,12 +33,12 @@ void ofApp::setup() {
     visualizer->setup(sampleRate, bufferSize);
 
     // Configure visualization parameters
-    visualParams.position = glm::vec2(50, 50);
-    visualParams.size = glm::vec2(700, 400);
+    visualParams.position = glm::vec2(200, 200);
+    visualParams.size = glm::vec2(ofGetWindowWidth(), ofGetWindowHeight() / 2);
     visualParams.primaryColor = ofColor::cyan;
     visualParams.secondaryColor = ofColor::magenta;
     visualParams.scale = 1.0f;
-    visualParams.smoothing = 0.001f;
+    visualParams.smoothing = 0.1f;
     visualParams.sensitivity = 1.0f;
     visualParams.showLabels = true;
 
@@ -171,7 +171,7 @@ void ofApp::draw() {
 
     // Draw the visualizer
     if (visualizer) {
-        visualizer->draw(currentFeatures);
+        visualizer->draw();
     }
 
     // Draw controls
@@ -223,7 +223,6 @@ void ofApp::drawControls() {
     info += "\n\nControls:";
     info += "\n[SPACE] Toggle Audio Input/Manual";
     info += "\n[M/m] Change Analysis Mode";
-    info += "\n" + audioAnalyzer->getModeNames()[static_cast<int>(audioAnalyzer->getCurrentMode())];
 
     ofDrawBitmapString(info, 20, 30);
 
@@ -371,6 +370,8 @@ void ofApp::keyPressed(int key) {
         if (visualizer) visualizer->reset();
         break;
 
+
+
         // Cycle through visualization modes with number keys
     case '1': if (visualizer) visualizer->setMode(VisualizationMode::WAVE_RMS); break;
     case '2': if (visualizer) visualizer->setMode(VisualizationMode::SPECTRUM_BARS); break;
@@ -378,8 +379,7 @@ void ofApp::keyPressed(int key) {
     case '4': if (visualizer) visualizer->setMode(VisualizationMode::PEAK_PULSES); break;
     case '5': if (visualizer) visualizer->setMode(VisualizationMode::CENTROID_WAVE); break;
     case '6': if (visualizer) visualizer->setMode(VisualizationMode::ONSET_PARTICLES); break;
-    case '7': if (visualizer) visualizer->setMode(VisualizationMode::WAVEFORM_RAW); break;
-    case '8': if (visualizer) visualizer->setMode(VisualizationMode::COMBINED_VIEW); break;
+    case '7': if (visualizer) visualizer->setMode(VisualizationMode::COMBINED_VIEW); break; 
     }
 }
 
