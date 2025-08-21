@@ -22,12 +22,6 @@ void AudioVisualizer::setup(int sr, int bs) {
         wave.setup();
     }
 
-    // Initialize spectrum data
-    smoothedSpectrum.resize(bufferSize / 2, 0.0f);
-    spectrumBars.resize(bufferSize / 2, 0.0f);
-    circularSpectrum.resize(bufferSize / 2);
-    spectrumHistory.reserve(HISTORY_SIZE);
-
     // Initialize particles
     particles.reserve(100);
     particleLifetimes.reserve(100);
@@ -43,21 +37,10 @@ void AudioVisualizer::setMode(VisualizationMode mode) {
     }
 }
 
-void AudioVisualizer::update(const AudioFeatures& features,
-    const std::vector<float>& leftChannel,
-    const std::vector<float>& rightChannel) {
+void AudioVisualizer::update(const AudioFeatures& features) {
+    currentFeatures = features;
 
-    if (currentMode == VisualizationMode::WAVE_RMS) {
-        updateWaveformData(leftChannel, rightChannel);
-    }
-
-    updateRMSValues(features);
-    updateSpectrumData(features);
-    updatePeakData(features);
-    updateOnsetData(features);
-    updateCentroidData(features);
-    updateParticles(currentOnsetDetected);
-    updateVisualState();
+    updateParticles(features.onsetDetected);
 }
 
 // Clean draw method - no parameters needed, all data is pre-processed
@@ -94,161 +77,85 @@ void AudioVisualizer::draw() {
         break;
     }
 
-    // Draw labels if enabled
-    if (visualParams.showLabels) {
-        std::string modeLabel = getModeNames()[static_cast<int>(currentMode)];
-        drawLabel(modeLabel, glm::vec2(10, visualParams.size.y - 20));
-    }
-
     ofPopMatrix();
 }
 
-// ============================================================================
-// UPDATE METHODS - All data processing happens here
-// ============================================================================
-
-void AudioVisualizer::updateRMSValues(const AudioFeatures& features) {
-    float factor = visualParams.smoothing;
-
-    smoothedRMS = smoothedRMS * (1.0f - factor) + features.leftRMS * factor;
-    leftRMS = leftRMS * (1.0f - factor) + features.leftRMS * factor;
-    rightRMS = rightRMS * (1.0f - factor) + features.rightRMS * factor;
-}
-
-void AudioVisualizer::updateSpectrumData(const AudioFeatures& features) {
-    if (features.fftMagnitudes.empty()) return;
-
-    float factor = visualParams.smoothing;
-
-    // Update smoothed spectrum
-    smoothedSpectrum.resize(features.fftMagnitudes.size());
-    for (size_t i = 0; i < features.fftMagnitudes.size(); ++i) {
-        smoothedSpectrum[i] = smoothedSpectrum[i] * (1.0f - factor) + features.fftMagnitudes[i] * factor;
-    }
-
-    // Process spectrum bars (ready-to-render bar heights)
-    spectrumBars.resize(features.fftMagnitudes.size());
-    float maxHeight = visualParams.size.y * 0.8f;
-    for (size_t i = 0; i < features.fftMagnitudes.size(); ++i) {
-        spectrumBars[i] = smoothedSpectrum[i] * maxHeight * visualParams.sensitivity;
-    }
-
-    // Process circular spectrum (convert to polar coordinates)
-    circularSpectrum.resize(features.fftMagnitudes.size());
-    float baseRadius = std::min(visualParams.size.x, visualParams.size.y) * 0.2f;
-    float maxRadius = std::min(visualParams.size.x, visualParams.size.y) * 0.4f;
-
-    for (size_t i = 0; i < features.fftMagnitudes.size(); ++i) {
-        float angle = TWO_PI * i / features.fftMagnitudes.size();
-        float magnitude = smoothedSpectrum[i] * visualParams.sensitivity;
-        float radius = baseRadius + magnitude * (maxRadius - baseRadius);
-
-        circularSpectrum[i] = polarToCartesian(radius, angle);
-    }
-}
-
-void AudioVisualizer::updatePeakData(const AudioFeatures& features) {
-    currentPeakDetected = features.peakDetected;
-
-    // Update pulse intensity
-    if (currentPeakDetected) {
-        pulseIntensity = std::min(1.0f, features.peakMagnitude);
-    }
-    else {
-        pulseIntensity *= 0.95f; // Decay
-    }
-}
-
-void AudioVisualizer::updateOnsetData(const AudioFeatures& features) {
-    currentOnsetDetected = features.onsetDetected;
-}
-
-void AudioVisualizer::updateCentroidData(const AudioFeatures& features) {
-    float factor = visualParams.smoothing;
-    smoothedCentroid = smoothedCentroid * (1.0f - factor) + features.spectralCentroid * factor;
-
-    // Normalize centroid for color mapping (0-1 range)
-    normalizedCentroid = smoothedCentroid / (sampleRate * 0.5f);
-    normalizedCentroid = ofClamp(normalizedCentroid, 0.0f, 1.0f);
-
-    // Pre-calculate color for centroid visualization
-    centroidColor = getColorFromFrequency(normalizedCentroid);
-}
-
-void AudioVisualizer::updateParticles(bool addNew) {
-    // Update existing particles
-    for (size_t i = 0; i < particleLifetimes.size(); ++i) {
-        particleLifetimes[i] -= 0.02f;
-        if (particleLifetimes[i] <= 0) {
-            particles.erase(particles.begin() + i);
-            particleLifetimes.erase(particleLifetimes.begin() + i);
-            particleColors.erase(particleColors.begin() + i);
-            --i;
-        }
-    }
-
-    // Add new particle on onset
-    if (addNew && particles.size() < 50) {
-        glm::vec2 newParticle = {
-            ofRandom(visualParams.size.x),
-            ofRandom(visualParams.size.y)
-        };
-        particles.push_back(newParticle);
-        particleLifetimes.push_back(1.0f);
-        particleColors.push_back(visualParams.primaryColor);
-    }
-}
-
-void AudioVisualizer::updateVisualState() {
-    // Update rotation for circular visualizations
-    rotationAngle += smoothedRMS * 2.0f;
-    if (rotationAngle > TWO_PI) rotationAngle -= TWO_PI;
-
-    // Update current color based on audio characteristics
-    currentColor = getColorFromAmplitude(smoothedRMS);
-}
-
-void AudioVisualizer::updateWaveformData(const std::vector<float>& leftChannel,
-    const std::vector<float>& rightChannel) {
-    // Downsample waveform data for efficient rendering
-    int targetSize = std::min((int)visualParams.size.x, 500); // Limit points for performance
-
-    if (!leftChannel.empty()) {
-        processedLeftChannel = downsampleForVisualization(leftChannel, targetSize);
-    }
-
-    if (!rightChannel.empty()) {
-        processedRightChannel = downsampleForVisualization(rightChannel, targetSize);
-    }
-
-    // Update waves if we have audio data
-    if (!leftChannel.empty() && waves.size() >= 2) {
-        waves[0].setWaveform(leftChannel);   // Left
-        if (!rightChannel.empty()) {
-            waves[1].setWaveform(rightChannel);  // Right
-        }
-    }
-}
 
 // ============================================================================
 // DRAW METHODS - Only rendering, no data processing
 // ============================================================================
 
+void AudioVisualizer::drawWaveformRMS() {
+    if (currentFeatures.leftChannelViz.empty()) return;
+
+    ofPushStyle();
+    ofSetColor(visualParams.primaryColor);
+    ofNoFill();
+    ofSetLineWidth(2);
+
+    // Draw left channel using pre-processed visualization data
+    ofBeginShape();
+    for (size_t i = 0; i < currentFeatures.leftChannelViz.size(); ++i) {
+        float x = (float)i / currentFeatures.leftChannelViz.size() * visualParams.size.x;
+        float y = visualParams.size.y * 0.25f + currentFeatures.leftChannelViz[i] * 100 * visualParams.sensitivity;
+        ofVertex(x, y);
+    }
+    ofEndShape();
+
+    // Draw right channel if available
+    if (!currentFeatures.rightChannelViz.empty()) {
+        ofSetColor(visualParams.secondaryColor);
+        ofBeginShape();
+        for (size_t i = 0; i < currentFeatures.rightChannelViz.size(); ++i) {
+            float x = (float)i / currentFeatures.rightChannelViz.size() * visualParams.size.x;
+            float y = visualParams.size.y * 0.75f + currentFeatures.rightChannelViz[i] * 100 * visualParams.sensitivity;
+            ofVertex(x, y);
+        }
+        ofEndShape();
+    }
+
+    ofPopStyle();
+}
+
 void AudioVisualizer::drawSpectrumBars() {
-    if (spectrumBars.empty()) return;
+    if (currentFeatures.fftMagnitudes.empty()) return;
 
     ofPushStyle();
 
-    float barWidth = visualParams.size.x / spectrumBars.size();
+    // Option 1: Use logarithmic frequency bands for better low-freq response
+    const auto& magnitudes = currentFeatures.fftMagnitudes.empty() ?
+        currentFeatures.fftMagnitudes :
+        currentFeatures.logFrequencyBands;
 
-    for (size_t i = 0; i < spectrumBars.size(); ++i) {
-        float height = spectrumBars[i];
+    float barWidth = visualParams.size.x / magnitudes.size();
 
-        // Color based on frequency
-        float freq = (float)i / spectrumBars.size();
-        ofColor barColor = getColorFromFrequency(freq);
+    for (size_t i = 0; i < magnitudes.size(); ++i) {
+        float height = magnitudes[i] * visualParams.sensitivity * visualParams.size.y;
+
+        // Enhanced color mapping based on frequency content
+        float freq = (float)i / magnitudes.size();
+        ofColor barColor;
+
+        if (freq < 0.1f) {
+            // Red for bass frequencies - make them more prominent
+            barColor = ofColor(255, freq * 2550, 0);
+            height *= 1.2f; // Boost bass visualization
+        }
+        else if (freq < 0.3f) {
+            // Orange to yellow for low-mid
+            barColor = ofColor(255, 100 + freq * 1550, 0);
+        }
+        else if (freq < 0.7f) {
+            // Yellow to green for mid frequencies
+            barColor = ofColor(255 - (freq - 0.3f) * 637, 255, 0);
+        }
+        else {
+            // Green to blue for high frequencies
+            barColor = ofColor(0, 255 - (freq - 0.7f) * 850, (freq - 0.7f) * 850);
+            height *= 0.9f; // Slightly reduce high-freq dominance
+        }
+
         ofSetColor(barColor);
-
         ofDrawRectangle(i * barWidth, visualParams.size.y - height, barWidth - 1, height);
     }
 
@@ -256,7 +163,7 @@ void AudioVisualizer::drawSpectrumBars() {
 }
 
 void AudioVisualizer::drawCircularSpectrum() {
-    if (circularSpectrum.empty()) return;
+    if (currentFeatures.circularSpectrum.empty()) return;
 
     ofPushStyle();
 
@@ -264,11 +171,16 @@ void AudioVisualizer::drawCircularSpectrum() {
 
     ofPushMatrix();
     ofTranslate(center);
-    ofRotate(ofRadToDeg(rotationAngle));
+    ofRotate(ofRadToDeg(currentFeatures.rotationAngle));
 
-    for (size_t i = 0; i < circularSpectrum.size(); ++i) {
-        glm::vec2 point = circularSpectrum[i];
-        float magnitude = smoothedSpectrum[i] * visualParams.sensitivity;
+    for (size_t i = 0; i < currentFeatures.circularSpectrum.size(); ++i) {
+        glm::vec2 point = currentFeatures.circularSpectrum[i];
+
+        // Use magnitude from smoothed spectrum for color
+        float magnitude = 0.0f;
+        if (i < currentFeatures.smoothedSpectrum.size()) {
+            magnitude = currentFeatures.smoothedSpectrum[i] * visualParams.sensitivity;
+        }
 
         // Color based on magnitude
         ofColor pointColor = getColorFromAmplitude(magnitude);
@@ -290,11 +202,11 @@ void AudioVisualizer::drawPeakPulses() {
 
     glm::vec2 center = visualParams.size * 0.5f;
     float baseRadius = 50;
-    float pulseRadius = baseRadius + pulseIntensity * 100 * visualParams.sensitivity;
+    float pulseRadius = baseRadius + currentFeatures.pulseIntensity * 100 * visualParams.sensitivity;
 
     // Main pulse circle
     ofColor pulseColor = visualParams.primaryColor;
-    pulseColor.a = 255 * (1.0f - pulseIntensity);
+    pulseColor.a = 255 * (1.0f - currentFeatures.pulseIntensity);
     ofSetColor(pulseColor);
     ofNoFill();
     ofSetLineWidth(3);
@@ -303,7 +215,7 @@ void AudioVisualizer::drawPeakPulses() {
     // Inner stable circle
     ofSetColor(visualParams.primaryColor);
     ofFill();
-    ofDrawCircle(center, baseRadius * smoothedRMS * visualParams.sensitivity);
+    ofDrawCircle(center, baseRadius * currentFeatures.smoothedRMS * visualParams.sensitivity);
 
     ofPopStyle();
 }
@@ -313,12 +225,12 @@ void AudioVisualizer::drawCentroidWave() {
 
     ofPushStyle();
 
-    // Use pre-calculated centroid color
-    ofSetColor(centroidColor);
+    // Use pre-calculated centroid color from features
+    ofSetColor(currentFeatures.centroidColor);
 
     ofPushMatrix();
     ofTranslate(0, visualParams.size.y * 0.5f);
-    waves[0].setAmplitude(smoothedRMS * visualParams.sensitivity * 100);
+    waves[0].setAmplitude(currentFeatures.smoothedRMS * visualParams.sensitivity * 100);
     waves[0].draw();
     ofPopMatrix();
 
@@ -337,38 +249,6 @@ void AudioVisualizer::drawOnsetParticles() {
             ofSetColor(particleColor);
             ofDrawCircle(particles[i], 5 * life);
         }
-    }
-
-    ofPopStyle();
-}
-
-void AudioVisualizer::drawWaveformRMS() {
-    if (processedLeftChannel.empty()) return;
-
-    ofPushStyle();
-    ofSetColor(visualParams.primaryColor);
-    ofNoFill();
-    ofSetLineWidth(2);
-
-    // Draw left channel using processed data
-    ofBeginShape();
-    for (size_t i = 0; i < processedLeftChannel.size(); ++i) {
-        float x = (float)i / processedLeftChannel.size() * visualParams.size.x;
-        float y = visualParams.size.y * 0.25f + processedLeftChannel[i] * 100 * visualParams.sensitivity;
-        ofVertex(x, y);
-    }
-    ofEndShape();
-
-    // Draw right channel if available
-    if (!processedRightChannel.empty()) {
-        ofSetColor(visualParams.secondaryColor);
-        ofBeginShape();
-        for (size_t i = 0; i < processedRightChannel.size(); ++i) {
-            float x = (float)i / processedRightChannel.size() * visualParams.size.x;
-            float y = visualParams.size.y * 0.75f + processedRightChannel[i] * 100 * visualParams.sensitivity;
-            ofVertex(x, y);
-        }
-        ofEndShape();
     }
 
     ofPopStyle();
@@ -398,30 +278,32 @@ void AudioVisualizer::drawCombinedView() {
 // HELPER FUNCTIONS
 // ============================================================================
 
-std::vector<float> AudioVisualizer::downsampleForVisualization(const std::vector<float>& input, int targetSize) {
-    if (input.empty() || targetSize <= 0) return {};
-    if (input.size() <= targetSize) return input;
 
-    std::vector<float> output;
-    output.reserve(targetSize);
+void AudioVisualizer::updateParticles(bool addNew) {
+    // Update existing particles
+    for (size_t i = 0; i < particleLifetimes.size(); ++i) {
+        particleLifetimes[i] -= 0.02f;  // Decay rate
 
-    float ratio = (float)input.size() / targetSize;
-    for (int i = 0; i < targetSize; ++i) {
-        int index = (int)(i * ratio);
-        if (index < input.size()) {
-            output.push_back(input[index]);
+        // Remove dead particles
+        if (particleLifetimes[i] <= 0) {
+            particles.erase(particles.begin() + i);
+            particleLifetimes.erase(particleLifetimes.begin() + i);
+            particleColors.erase(particleColors.begin() + i);
+            --i;  // Adjust index after removal
         }
     }
 
-    return output;
-}
+    // Add new particle on onset
+    if (addNew && particles.size() < 50) {  // Limit max particles for performance
+        glm::vec2 newParticle = {
+            ofRandom(visualParams.size.x),
+            ofRandom(visualParams.size.y)
+        };
 
-void AudioVisualizer::smoothValue(float& target, float newValue, float smoothing) {
-    target = target * (1.0f - smoothing) + newValue * smoothing;
-}
-
-glm::vec2 AudioVisualizer::polarToCartesian(float radius, float angle) {
-    return glm::vec2(cos(angle) * radius, sin(angle) * radius);
+        particles.push_back(newParticle);
+        particleLifetimes.push_back(1.0f);  // Start with full life
+        particleColors.push_back(visualParams.primaryColor);
+    }
 }
 
 ofColor AudioVisualizer::getColorFromFrequency(float freq) {
@@ -445,11 +327,11 @@ ofColor AudioVisualizer::getColorFromAmplitude(float amplitude) {
         visualParams.primaryColor.b * amplitude);
 }
 
-void AudioVisualizer::drawLabel(const std::string& text, glm::vec2 position) {
-    ofPushStyle();
-    ofSetColor(255, 200);
-    ofDrawBitmapString(text, position);
-    ofPopStyle();
+void AudioVisualizer::reset() {
+    // Clear all particle data
+    particles.clear();
+    particleLifetimes.clear();
+    particleColors.clear();
 }
 
 void AudioVisualizer::nextMode() {
@@ -484,32 +366,4 @@ std::vector<std::string> AudioVisualizer::getModeNames() const {
         "Onset Particles",
         "Combined View"
     };
-}
-
-void AudioVisualizer::reset() {
-    smoothedRMS = 0.0f;
-    leftRMS = 0.0f;
-    rightRMS = 0.0f;
-    smoothedCentroid = 0.0f;
-    normalizedCentroid = 0.0f;
-    pulseIntensity = 0.0f;
-    rotationAngle = 0.0f;
-    currentPeakDetected = false;
-    currentOnsetDetected = false;
-
-    particles.clear();
-    particleLifetimes.clear();
-    particleColors.clear();
-    processedLeftChannel.clear();
-    processedRightChannel.clear();
-
-    std::fill(smoothedSpectrum.begin(), smoothedSpectrum.end(), 0.0f);
-    std::fill(spectrumBars.begin(), spectrumBars.end(), 0.0f);
-}
-
-void AudioVisualizer::addToHistory(float value, std::vector<float>& history) {
-    history.push_back(value);
-    if (history.size() > HISTORY_SIZE) {
-        history.erase(history.begin());
-    }
 }

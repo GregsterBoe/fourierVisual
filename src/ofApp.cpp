@@ -5,27 +5,15 @@ void ofApp::setup() {
     ofBackground(0);
     ofSetVerticalSync(true);
 
-    center.x = ofGetWindowWidth() / 2;
-    center.y = ofGetWindowHeight() / 2;
-    topLeft.x = ofGetWindowWidth() / 4;
-    topLeft.y = ofGetWindowHeight() / 4;
-    topRight.x = ofGetWindowWidth() / 1.5;
-    topRight.y = ofGetWindowHeight() / 4;
-    bottomLeft.x = ofGetWindowWidth() / 4;
-    bottomLeft.y = ofGetWindowHeight() / 1.5;
-    bottomRight.x = ofGetWindowWidth() / 1.5;
-    bottomRight.y = ofGetWindowHeight() / 1.5;
-    midRight.x = 0;
-    midRight.y = ofGetWindowHeight() / 2;
-
     // Initialize wave parameters
     baseFrequency = 440.0; // Base frequency (A4)
     baseAmplitude = 20.0;
     frequency = baseFrequency;
     amplitude = baseAmplitude;
     phase = 0.0;
-    sampleRate = 100;
+    sampleRate = 44100;
     numSamples = 1024;
+    bufferSize = 2048;
 
 
     // Setup visualizer
@@ -52,39 +40,8 @@ void ofApp::setup() {
     // settings.setApi(ofSoundDevice::Api::MS_WASAPI);
 
 
-    auto devices = soundStream.getDeviceList(); // Get devices for the chosen API
-
-    int inputDeviceID = -1;
-    cout << "Available Audio Devices for chosen API:" << endl;
-    for (int i = 0; i < devices.size(); i++) {
-        cout << "device: " << devices[i].deviceID << " name: " << devices[i].name
-            << " input channels: " << devices[i].inputChannels
-            << " output channels: " << devices[i].outputChannels << endl;
-
-        // Look for "VoiceMeeter Output" or "VoiceMeeter Aux Output"
-        // These are the *recording* devices you want to listen to.
-        if (devices[i].name.find("VoiceMeeter Aux Output (VB-Audio VoiceMeeter AUX VAIO)") != string::npos && devices[i].inputChannels > 0) {
-            inputDeviceID = devices[i].deviceID;
-            cout << "Found VoiceMeeter Aux Output (WASAPI/DirectSound) at deviceID: " << inputDeviceID << endl;
-            break;
-        }
-        if (devices[i].name.find("VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)") != string::npos && devices[i].inputChannels > 0 && inputDeviceID == -1) {
-            inputDeviceID = devices[i].deviceID;
-            cout << "Found VoiceMeeter Output (WASAPI/DirectSound) at deviceID: " << inputDeviceID << endl;
-            // Don't break yet, in case Aux is found later and preferred
-        }
-    }
-
-    if (inputDeviceID != -1) {
-        settings.setInDevice(devices[inputDeviceID]);
-        cout << "Using input device: " << devices[inputDeviceID].name << endl;
-    }
-    else {
-        cout << "VoiceMeeter recording device not found for selected API. Using default.";
-    }
-
     settings.setInListener(this);
-    settings.sampleRate = 44100;
+    settings.sampleRate = sampleRate;
 #ifdef TARGET_EMSCRIPTEN
     settings.numOutputChannels = 2;
 #else
@@ -96,14 +53,7 @@ void ofApp::setup() {
     
     // initialize audio analysis
     audioAnalyzer = std::make_unique<AudioAnalyzer>();
-    audioAnalyzer->setup(44100, bufferSize);
-
-    // Initialize togglers
-    sampleRateToggler = std::make_unique<ValueToggler<int>>(sampleRate, 100, 'S', 's');
-    numSamplesToggler = std::make_unique<ValueToggler<int>>(numSamples, 100, 'N', 'n');
-    frequencyToggler = std::make_unique<ValueToggler<float>>(baseFrequency, 5.0f, 'F', 'f');
-    amplitudeToggler = std::make_unique<ValueToggler<float>>(baseAmplitude, 5.0f, 'A', 'a');
-    phaseToggler = std::make_unique<ValueToggler<float>>(phase, 5.0f, 'P', 'p');
+    audioAnalyzer->setup(sampleRate, bufferSize);
 }
 
 //--------------------------------------------------------------
@@ -123,21 +73,6 @@ void ofApp::audioIn(ofSoundBuffer& input) {
         }
     }
 
-    // NEW: Analyze audio using current mode
-    currentFeatures = audioAnalyzer->analyze(left, right);
-
-    // Update smoothed values (you can now use currentFeatures.leftRMS instead)
-    float leftChange = abs(currentFeatures.leftRMS - smoothedLeftVol);
-    float rightChange = abs(currentFeatures.rightRMS - smoothedRightVol);
-
-    float leftSmoothing = (leftChange > smoothingThreshold) ? fastSmoothingFactor : slowSmoothingFactor;
-    float rightSmoothing = (rightChange > smoothingThreshold) ? fastSmoothingFactor : slowSmoothingFactor;
-
-    smoothedLeftVol = smoothedLeftVol * (1.0f - leftSmoothing) + currentFeatures.leftRMS * leftSmoothing;
-    smoothedRightVol = smoothedRightVol * (1.0f - rightSmoothing) + currentFeatures.rightRMS * rightSmoothing;
-
-
-
 }
 
 //--------------------------------------------------------------
@@ -145,19 +80,10 @@ void ofApp::update() {
     // ... your existing update code ...
 
     // Update audio analysis
-    if (audioAnalyzer && (useAudioInput || !left.empty())) {
-        if (useAudioInput) {
-            currentFeatures = audioAnalyzer->analyze(left, right);
-        }
-        else {
-            frequency = frequencyToggler->getValue();
-            amplitude = amplitudeToggler->getValue();
-            leftWave = Wave(frequency, amplitude, phase, sampleRate, numSamples);
-            rightWave = Wave(frequency, amplitude, phase, sampleRate, numSamples);
-        }
-
+    if (!left.empty()) {
+        currentFeatures = audioAnalyzer->analyze(left, right);
         // Update visualizer with current audio features and raw data
-        visualizer->update(currentFeatures, left, right);
+        visualizer->update(currentFeatures);
     } 
 
     // Update phase for animation
@@ -183,48 +109,13 @@ void ofApp::draw() {
 }
 
 void ofApp::drawControls() {
-    string info = "Mode: " + string(useAudioInput ? "Audio Input" : "Manual Control");
-    info += "\nAnalysis Mode: " + audioAnalyzer->getModeNames()[static_cast<int>(audioAnalyzer->getCurrentMode())];
-    info += "\nFrequency: " + ofToString(frequency, 1) + " Hz";
+    string info = "";
+    info += "Avg Freq: " + std::to_string(audioAnalyzer->getAverageFrequency());
+    info += ", Max Freq: " + std::to_string(audioAnalyzer->getMaxFrequency());
+    ofSetColor(255);
 
-    if (useAudioInput) {
-        // Show different information based on analysis mode
-        switch (audioAnalyzer->getCurrentMode()) {
-        case AudioAnalysisMode::RMS_AMPLITUDE:
-            info += "\nLeft RMS: " + ofToString(currentFeatures.leftRMS, 3);
-            info += "\nRight RMS: " + ofToString(currentFeatures.rightRMS, 3);
-            break;
+    ofDrawBitmapString("Analysis info: " + info, 10, ofGetHeight() - 80);
 
-        case AudioAnalysisMode::FFT_SPECTRUM:
-            info += "\nSpectrum Bins: " + ofToString(currentFeatures.fftMagnitudes.size());
-            info += "\nOverall Energy: " + ofToString(currentFeatures.overallEnergy, 3);
-            break;
-
-        case AudioAnalysisMode::PEAK_DETECTION:
-            info += "\nPeak Detected: " + string(currentFeatures.peakDetected ? "YES" : "NO");
-            if (currentFeatures.peakDetected) {
-                info += "\nPeak Magnitude: " + ofToString(currentFeatures.peakMagnitude, 3);
-            }
-            break;
-
-        case AudioAnalysisMode::SPECTRAL_CENTROID:
-            info += "\nSpectral Centroid: " + ofToString(currentFeatures.spectralCentroid, 1) + " Hz";
-            break;
-
-        case AudioAnalysisMode::ONSET_DETECTION:
-            info += "\nOnset Detected: " + string(currentFeatures.onsetDetected ? "YES" : "NO");
-            if (currentFeatures.onsetDetected) {
-                info += "\nOnset Strength: " + ofToString(currentFeatures.onsetStrength, 3);
-            }
-            break;
-        }
-    }
-
-    info += "\n\nControls:";
-    info += "\n[SPACE] Toggle Audio Input/Manual";
-    info += "\n[M/m] Change Analysis Mode";
-
-    ofDrawBitmapString(info, 20, 30);
 
     // Add visualizer info
     if (visualizer) {
@@ -265,14 +156,6 @@ void ofApp::drawVisualizerControls() {
     ofDrawBitmapString("Scale: " + ofToString(visualParams.scale, 2), ofGetWidth() - 290, y);
     y += 20;
 
-    // Audio analyzer info
-    if (audioAnalyzer) {
-        auto analyzerModeNames = audioAnalyzer->getModeNames();
-        int analyzerModeIndex = static_cast<int>(audioAnalyzer->getCurrentMode());
-        ofDrawBitmapString("Audio Analysis: " + analyzerModeNames[analyzerModeIndex], ofGetWidth() - 290, y);
-        y += 15;
-    }
-
     // Instructions
     y += 10;
     ofDrawBitmapString("LEFT/RIGHT: Change mode", ofGetWidth() - 290, y);
@@ -280,8 +163,6 @@ void ofApp::drawVisualizerControls() {
     ofDrawBitmapString("UP/DOWN: Sensitivity", ofGetWidth() - 290, y);
     y += 12;
     ofDrawBitmapString("1-8: Direct mode select", ofGetWidth() - 290, y);
-    y += 12;
-    ofDrawBitmapString("R: Reset visualizer", ofGetWidth() - 290, y);
     y += 12;
     ofDrawBitmapString("V: Hide this panel", ofGetWidth() - 290, y);
 
@@ -298,16 +179,6 @@ void ofApp::keyPressed(int key) {
         handled = true;
     }
 
-    // NEW: Change analysis mode
-    if (key == 'M') {
-        audioAnalyzer->nextMode();
-        handled = true;
-    }
-    if (key == 'm') {
-        audioAnalyzer->previousMode();
-        handled = true;
-    }
-
     // Your existing key handling code...
     auto handleToggle = [&](auto& toggler, const std::string& name) {
         if (key == toggler->getIncreaseKey()) {
@@ -321,19 +192,6 @@ void ofApp::keyPressed(int key) {
             handled = true;
         }
     };
-
-    handleToggle(sampleRateToggler, "Sample Rate");
-    handleToggle(numSamplesToggler, "Num Samples");
-    handleToggle(phaseToggler, "Phase");
-
-    if (!useAudioInput) {
-        handleToggle(frequencyToggler, "Frequency");
-        handleToggle(amplitudeToggler, "Amplitude");
-    }
-
-    if (!handled) {
-        std::cout << "Unmapped key: " << static_cast<char>(key) << std::endl;
-    }
 
     // Your existing g/G keys...
     if (key == 'g') {

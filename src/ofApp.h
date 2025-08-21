@@ -64,21 +64,6 @@ public:
     float smoothedAmplitude;
     float smoothedFrequency;
 
-    // UI positions
-    glm::vec2 center;
-    glm::vec2 topLeft;
-    glm::vec2 topRight;
-    glm::vec2 bottomLeft;
-    glm::vec2 bottomRight;
-    glm::vec2 midRight;
-
-    // Controls
-    std::unique_ptr<ValueToggler<int>> sampleRateToggler;
-    std::unique_ptr<ValueToggler<int>> numSamplesToggler;
-    std::unique_ptr<ValueToggler<float>> frequencyToggler;
-    std::unique_ptr<ValueToggler<float>> amplitudeToggler;
-    std::unique_ptr<ValueToggler<float>> phaseToggler;
-
     // Mode control
     bool useAudioInput;
     float baseFrequency;
