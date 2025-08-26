@@ -122,41 +122,43 @@ void AudioVisualizer::drawSpectrumBars() {
 
     ofPushStyle();
 
-    // Option 1: Use logarithmic frequency bands for better low-freq response
-    const auto& magnitudes = currentFeatures.fftMagnitudes.empty() ?
-        currentFeatures.fftMagnitudes :
-        currentFeatures.logFrequencyBands;
+    auto magnitudes = currentFeatures.logFrequencyBands;
+    std::reverse(magnitudes.begin(), magnitudes.end());
+    float initialBarWidth = visualParams.size.x / magnitudes.size();
+    int groupSize = 1;
 
-    float barWidth = visualParams.size.x / magnitudes.size();
+    // Calculate how many bins to group together to meet minimum width
+    while (initialBarWidth * groupSize < MIN_BAR_WIDTH && groupSize < magnitudes.size()) {
+        groupSize *= 2; // Double the group size each iteration
+    }
 
-    for (size_t i = 0; i < magnitudes.size(); ++i) {
-        float height = magnitudes[i] * visualParams.sensitivity * visualParams.size.y;
+    // Calculate final parameters
+    int numBars = magnitudes.size() / groupSize;
+    float finalBarWidth = visualParams.size.x / numBars;
 
-        // Enhanced color mapping based on frequency content
-        float freq = (float)i / magnitudes.size();
-        ofColor barColor;
+    for (int i = 0; i < numBars; ++i) {
+        // Accumulate neighboring heights
+        float accumulatedHeight = 0.0f;
+        int actualGroupSize = 0;
 
-        if (freq < 0.1f) {
-            // Red for bass frequencies - make them more prominent
-            barColor = ofColor(255, freq * 2550, 0);
-            height *= 1.2f; // Boost bass visualization
+        for (int j = 0; j < groupSize && (i * groupSize + j) < magnitudes.size(); ++j) {
+            accumulatedHeight += magnitudes[i * groupSize + j];
+            actualGroupSize++;
         }
-        else if (freq < 0.3f) {
-            // Orange to yellow for low-mid
-            barColor = ofColor(255, 100 + freq * 1550, 0);
-        }
-        else if (freq < 0.7f) {
-            // Yellow to green for mid frequencies
-            barColor = ofColor(255 - (freq - 0.3f) * 637, 255, 0);
-        }
-        else {
-            // Green to blue for high frequencies
-            barColor = ofColor(0, 255 - (freq - 0.7f) * 850, (freq - 0.7f) * 850);
-            height *= 0.9f; // Slightly reduce high-freq dominance
-        }
+
+        // Average the accumulated values
+        float height = (accumulatedHeight / actualGroupSize) * visualParams.sensitivity * visualParams.size.y;
+
+        // Clean position-based color transition (0.0 = left, 1.0 = right)
+        float position = (float)i / (numBars - 1); // Normalize to [0,1]
+        ofColor barColor = getSpectrumColor(position);
 
         ofSetColor(barColor);
-        ofDrawRectangle(i * barWidth, visualParams.size.y - height, barWidth - 1, height);
+
+        float x = visualParams.position.x + i * finalBarWidth;
+        float y = visualParams.position.y + visualParams.size.y - height;
+
+        ofDrawRectangle(x, y, finalBarWidth - 1, height);
     }
 
     ofPopStyle();
@@ -325,6 +327,43 @@ ofColor AudioVisualizer::getColorFromAmplitude(float amplitude) {
     return ofColor(visualParams.primaryColor.r * amplitude,
         visualParams.primaryColor.g * amplitude,
         visualParams.primaryColor.b * amplitude);
+}
+
+ofColor AudioVisualizer::getSpectrumColor(float position) {
+    // Clamp position to [0,1] range
+    position = std::max(0.0f, std::min(1.0f, position));
+
+    // Option 1: Classic rainbow spectrum (ROYGBIV)
+    if (position < 0.17f) {
+        // Red to Orange
+        float t = position / 0.17f;
+        return ofColor(255, t * 165, 0);
+    }
+    else if (position < 0.33f) {
+        // Orange to Yellow  
+        float t = (position - 0.17f) / 0.16f;
+        return ofColor(255, 165 + t * 90, 0);
+    }
+    else if (position < 0.5f) {
+        // Yellow to Green
+        float t = (position - 0.33f) / 0.17f;
+        return ofColor(255 - t * 255, 255, 0);
+    }
+    else if (position < 0.67f) {
+        // Green to Cyan
+        float t = (position - 0.5f) / 0.17f;
+        return ofColor(0, 255, t * 255);
+    }
+    else if (position < 0.83f) {
+        // Cyan to Blue
+        float t = (position - 0.67f) / 0.16f;
+        return ofColor(0, 255 - t * 255, 255);
+    }
+    else {
+        // Blue to Violet
+        float t = (position - 0.83f) / 0.17f;
+        return ofColor(t * 128, 0, 255);
+    }
 }
 
 void AudioVisualizer::reset() {

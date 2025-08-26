@@ -70,10 +70,18 @@ AudioFeatures AudioAnalyzer::analyze(const std::vector<float>&leftChannel,
         features.fftBins[i] = (float)i * sampleRate / (2.0f * features.fftMagnitudes.size());
     }
 
-    // Enhanced frequency analysis
-    features.bassResponse = getLowFrequencyBands(features.fftMagnitudes, 6);
-    features.logFrequencyBands = getLogFrequencyBands(features.fftMagnitudes, 128);
+    features.logFrequencyBands = getLogFrequencyBands(features.fftMagnitudes, bufferSize);
 
+    // Update running maximum
+    float currentMax = *std::max_element(features.logFrequencyBands.begin(), features.logFrequencyBands.end());
+    runningMax = std::max(currentMax, runningMax * maxDecayRate);
+
+    // Normalize using running maximum
+    if (runningMax > 0.0f) {
+        for (auto& band : features.logFrequencyBands) {
+            band = std::min(1.0f, band / runningMax); // Clamp to [0, 1]
+        }
+    }
     // Calculate energy in different frequency ranges
     calculateFrequencyEnergies(features);
 
@@ -93,13 +101,6 @@ AudioFeatures AudioAnalyzer::analyze(const std::vector<float>&leftChannel,
             features.fftMagnitudes[i] * visualSmoothingFactor;
     }
     features.smoothedSpectrum = smoothedSpectrum;
-
-    // Process spectrum bar heights (ready for rendering)
-    features.spectrumBarHeights.resize(features.fftMagnitudes.size());
-    float maxHeight = visualizationSize.y * 0.8f;
-    for (size_t i = 0; i < features.fftMagnitudes.size(); ++i) {
-        features.spectrumBarHeights[i] = smoothedSpectrum[i] * maxHeight;
-    }
 
     // Process circular spectrum (polar coordinates)
     features.circularSpectrum.resize(features.fftMagnitudes.size());
@@ -217,43 +218,7 @@ float AudioAnalyzer::calculateRMS(const std::vector<float>& samples) {
     return sqrt(sum / samples.size());
 }
 
-void AudioAnalyzer::performFFT(const std::vector<float>& input, std::vector<float>& magnitudes) {
-    int N = std::min((int)input.size(), bufferSize);
-    magnitudes.resize(N / 2);
-
-    // Apply Hamming window to reduce spectral leakage
-    std::vector<float> windowed(N);
-    for (int n = 0; n < N; n++) {
-        // Hamming window
-        float window = 0.54f - 0.46f * cos(2.0f * PI * n / (N - 1));
-        windowed[n] = input[n] * window;
-    }
-
-    // Compute DFT
-    for (int k = 0; k < N / 2; k++) {
-        float real = 0.0f, imag = 0.0f;
-
-        for (int n = 0; n < N; n++) {
-            float angle = -2.0f * PI * k * n / N;
-            real += windowed[n] * cos(angle);
-            imag += windowed[n] * sin(angle);
-        }
-
-        // Calculate magnitude and normalize properly
-        float magnitude = sqrt(real * real + imag * imag);
-        // Normalize by N/2 and account for window energy loss
-        magnitudes[k] = magnitude / (N * 0.5f);
-
-        // Apply logarithmic scaling for better visualization
-        if (magnitudes[k] > 0.0f) {
-            magnitudes[k] = 20.0f * log10(magnitudes[k] + 1e-6f); // Add small value to avoid log(0)
-            // Map from dB range (-120 to 0) to (0 to 1)
-            magnitudes[k] = std::max(0.0f, (magnitudes[k] + 120.0f) / 120.0f);
-        }
-    }
-}
-
-// Method 2: Fast FFT implementation using Cooley-Tukey algorithm
+// Fast FFT implementation using Cooley-Tukey algorithm
 // Add this as an alternative method to your AudioAnalyzer class
 
 void AudioAnalyzer::performFFTFast(const std::vector<float>& input, std::vector<float>& magnitudes) {
@@ -266,182 +231,78 @@ void AudioAnalyzer::performFFTFast(const std::vector<float>& input, std::vector<
     // Initialize complex input array
     std::vector<std::complex<float>> fft_input(fftSize, 0.0f);
 
-    // Apply windowing and copy to complex array
+    // Apply windowing - use Hann window for better frequency resolution
     for (int i = 0; i < N; i++) {
-        // Hamming window
-        float window = 0.54f - 0.46f * cos(2.0f * PI * i / (N - 1));
+        // Hann window - better than Hamming for frequency analysis
+        float window = 0.5f * (1.0f - cos(2.0f * PI * i / (N - 1)));
         fft_input[i] = std::complex<float>(input[i] * window, 0.0f);
     }
 
     // Perform FFT
     cooleyTukeyFFT(fft_input);
 
-    // Extract magnitudes with frequency-dependent processing
+    // Extract magnitudes with minimal processing to preserve selectivity
     int numBins = fftSize / 2;
     magnitudes.resize(numBins);
 
-    float sampleRateFloat = (float)sampleRate;
-    float binWidth = sampleRateFloat / fftSize;
-
     for (int i = 0; i < numBins; i++) {
         float magnitude = std::abs(fft_input[i]);
-        float frequency = i * binWidth;
 
-        frequencySum += frequency;
+        // Simple, clean normalization
+        magnitude = magnitude / fftSize;
 
-        if (frequency > maxFrequency) {
-            maxFrequency = frequency;
+        // Skip DC bin (often just noise)
+        if (i == 0) {
+            magnitude = 0.0f;
         }
-
-        // Normalize
-        magnitude /= (fftSize * 0.1f);
-
-        // Frequency compensation
-        //magnitude /= sqrt(frequency + 1.0f);
-
-        // Convert to dB
-        // magnitude = 20.0f * log10(magnitude + 1e-6f);
-
-        // Apply frequency-dependent scaling to flatten response
-        //magnitude = applyFrequencyCompensation(magnitude, frequency);
-
-        // Convert to dB with better scaling for low frequencies
-        // magnitude = amplitudeToVisualizationScale(magnitude, frequency);
 
         magnitudes[i] = magnitude;
     }
 
-    averageFrequency = frequencySum / numBins;
-    frequencySum = 0.0f;
-
-    // Apply smoothing with frequency-dependent factors
-    applyFrequencyAwareSmoothing(magnitudes);
+    // Apply minimal, frequency-aware processing
+    enhanceFrequencySelectivity(magnitudes);
 }
 
-float AudioAnalyzer::applyFrequencyCompensation(float magnitude, float frequency) {
-    // Human hearing compensation (approximate inverse A-weighting)
-    if (frequency < 20.0f) return magnitude; // Below audible range
-
-    if (frequency < 100.0f) {
-        // Boost very low frequencies (they're naturally quieter)
-        float boost = 1.0f + (100.0f - frequency) / 100.0f * 2.0f; // Up to 3x boost
-        magnitude *= boost;
-    }
-    else if (frequency < 1000.0f) {
-        // Mild boost for low-mid frequencies
-        float boost = 1.0f + (1000.0f - frequency) / 1000.0f * 0.5f; // Up to 1.5x boost
-        magnitude *= boost;
-    }
-    else if (frequency > 8000.0f) {
-        // Slight reduction for very high frequencies to prevent noise dominance
-        float reduction = 1.0f - (frequency - 8000.0f) / 14000.0f * 0.3f;
-        magnitude *= std::max(0.7f, reduction);
-    }
-
-    return magnitude;
-}
-
-// Better scaling for visualization
-float AudioAnalyzer::amplitudeToVisualizationScale(float magnitude, float frequency) {
-    if (magnitude <= 0.0f) return 0.0f;
-
-    // Use different scaling approaches for different frequency ranges
-    if (frequency < 200.0f) {
-        // Linear scaling for very low frequencies (more responsive)
-        return std::min(1.0f, magnitude * 10.0f);
-    }
-    else {
-        // Square root scaling for mid frequencies (balanced)
-        return std::min(1.0f, sqrt(magnitude * 2.0f));
-    }
-   
-}
-
-// Apply different smoothing factors based on frequency
-void AudioAnalyzer::applyFrequencyAwareSmoothing(std::vector<float>& magnitudes) {
-    if (magnitudes.size() != smoothedSpectrum.size()) {
-        smoothedSpectrum.resize(magnitudes.size(), 0.0f);
-    }
+void AudioAnalyzer::enhanceFrequencySelectivity(std::vector<float>& magnitudes) {
+    if (magnitudes.empty()) return;
 
     float sampleRateFloat = (float)sampleRate;
     float binWidth = sampleRateFloat / (magnitudes.size() * 2);
 
-    for (size_t i = 0; i < magnitudes.size(); ++i) {
+    for (size_t i = 1; i < magnitudes.size(); ++i) {
         float frequency = i * binWidth;
-        float smoothingFactor;
+        float& magnitude = magnitudes[i];
 
-        if (frequency < lowFrequencyLimit) {
-            // Very light smoothing for low frequencies (more reactive)
-            smoothingFactor = 0.1f;
+        // Apply frequency-specific enhancements
+        if (frequency < 60.0f) {
+            // Sub-bass: like chill
+            magnitude *= 0.5f;
         }
-        else if (frequency < midFrequencyLimit) {
-            // Medium smoothing for mid frequencies
-            smoothingFactor = 0.2f;
+        else if (frequency < 250.0f) {
+            // Bass: Slow dooown boi
+            magnitude *= 0.4f;
+        }
+        else if (frequency < 2000.0f) {
+            // Mid-range: Slight boost
+            magnitude *= 1.1f;
+        }
+        else if (frequency < 8000.0f) {
+            // Upper mids: Increase
+            magnitude *= 2.0f;
         }
         else {
-            // Heavier smoothing for high frequencies (less jittery)
-            smoothingFactor = 0.1f;
+            // Highs: puuush
+            magnitude *= 4.0f;
         }
 
-        smoothedSpectrum[i] = smoothedSpectrum[i] * (1.0f - smoothingFactor) +
-            magnitudes[i] * smoothingFactor;
-        magnitudes[i] = smoothedSpectrum[i];
+        // Apply dynamic range enhancement
+        if (magnitude > 0.001f) {
+            // Power law to increase dynamic range
+            magnitude = pow(magnitude, 0.5f);
+        }
     }
 }
 
-// Enhanced low-frequency analysis method
-// Add this to your AudioAnalyzer for better bass response
-std::vector<float> AudioAnalyzer::getLowFrequencyBands(const std::vector<float>& magnitudes, int numBands) {
-    std::vector<float> bassResponse(numBands, 0.0f);
-
-    if (magnitudes.empty()) return bassResponse;
-
-    float sampleRateFloat = (float)sampleRate;
-    float binWidth = sampleRateFloat / (magnitudes.size() * 2);
-
-    // Define bass frequency ranges (more detailed breakdown)
-    std::vector<std::pair<float, float>> bassRanges = {
-        {20.0f, 40.0f},    // Sub-bass
-        {40.0f, 80.0f},    // Bass
-        {80.0f, 160.0f},   // Low bass
-        {160.0f, 320.0f}   // Mid bass
-    };
-
-    // Ensure we don't exceed available bands
-    int actualBands = std::min(numBands, (int)bassRanges.size());
-
-    for (int band = 0; band < actualBands; band++) {
-        float lowFreq = bassRanges[band].first;
-        float highFreq = bassRanges[band].second;
-
-        int startBin = std::max(1, (int)(lowFreq / binWidth));
-        int endBin = std::min((int)magnitudes.size() - 1, (int)(highFreq / binWidth));
-
-        if (startBin <= endBin) {
-            float sum = 0.0f;
-            int count = 0;
-
-            for (int bin = startBin; bin <= endBin; bin++) {
-                // Weight lower frequencies more heavily
-                float weight = 1.0f + (endBin - bin) / (float)(endBin - startBin);
-                sum += magnitudes[bin] * weight;
-                count++;
-            }
-
-            if (count > 0) {
-                bassResponse[band] = sum / count;
-                // Apply additional boost for very low frequencies
-                if (lowFreq < 60.0f) {
-                    bassResponse[band] *= 1.5f;
-                }
-            }
-        }
-    }
-
-    return bassResponse;
-}
-
-// Method to get logarithmically spaced frequency bands (alternative approach)
 std::vector<float> AudioAnalyzer::getLogFrequencyBands(const std::vector<float>& magnitudes, int numBands) {
     std::vector<float> logBands(numBands, 0.0f);
 
@@ -449,8 +310,8 @@ std::vector<float> AudioAnalyzer::getLogFrequencyBands(const std::vector<float>&
 
     float sampleRateFloat = (float)sampleRate;
     float binWidth = sampleRateFloat / (magnitudes.size() * 2);
-    float maxFreq = sampleRateFloat * 0.5f; // Nyquist frequency
-    float minFreq = 20.0f; // Minimum audible frequency
+    float maxFreq = sampleRateFloat * 0.5f;
+    float minFreq = 20.0f;
 
     // Calculate logarithmic frequency boundaries
     std::vector<float> boundaries(numBands + 1);
@@ -462,7 +323,7 @@ std::vector<float> AudioAnalyzer::getLogFrequencyBands(const std::vector<float>&
         boundaries[i] = pow(10.0f, logMin + i * logStep);
     }
 
-    // Sum magnitudes in each logarithmic band
+    // Use different aggregation strategies to preserve separation
     for (int band = 0; band < numBands; band++) {
         float lowFreq = boundaries[band];
         float highFreq = boundaries[band + 1];
@@ -471,11 +332,15 @@ std::vector<float> AudioAnalyzer::getLogFrequencyBands(const std::vector<float>&
         int endBin = std::min((int)magnitudes.size() - 1, (int)(highFreq / binWidth));
 
         if (startBin <= endBin) {
-            float sum = 0.0f;
+
+            // Strategy 3: Power mean (preserves dynamic range better than arithmetic mean)
+            float powerSum = 0.0f;
+            int count = 0;
             for (int bin = startBin; bin <= endBin; bin++) {
-                sum += magnitudes[bin];
-            }
-            logBands[band] = sum / (endBin - startBin + 1);
+                powerSum += pow(magnitudes[bin], 2.0f); // Square each value
+                count++;
+             }
+             logBands[band] = count > 0 ? sqrt(powerSum / count) : 0.0f;
         }
     }
 
@@ -569,15 +434,39 @@ void AudioAnalyzer::performFFTOptimal(const std::vector<float>& input, std::vect
 
     // For small buffer sizes, use regular DFT
     if (N < 64) {
-        performFFT(input, magnitudes);
+        performRealFFT(input, magnitudes);
     }
     // For power-of-2 sizes >= 64, use fast FFT
-    else if ((N & (N - 1)) == 0) {  // Check if N is power of 2
+    else {
         performFFTFast(input, magnitudes);
     }
-    // For other sizes, use real FFT
-    else {
-        performRealFFT(input, magnitudes);
+
+    applySelectiveSmoothing(magnitudes);
+}
+
+void AudioAnalyzer::applySelectiveSmoothing(std::vector<float>& magnitudes) {
+    if (magnitudes.size() != smoothedSpectrum.size()) {
+        smoothedSpectrum.resize(magnitudes.size(), 0.0f);
+    }
+
+    float sampleRateFloat = (float)sampleRate;
+    float binWidth = sampleRateFloat / (magnitudes.size() * 2);
+
+    for (size_t i = 0; i < magnitudes.size(); ++i) {
+        float frequency = i * binWidth;
+        float currentValue = magnitudes[i];
+        float& smoothedValue = smoothedSpectrum[i];
+
+        // Adaptive smoothing based on signal characteristics
+        float smoothingFactor = 0.1f;
+
+        // Peak-aware smoothing: less smoothing when signal is rising
+        if (currentValue > smoothedValue * 1.1f) {
+            smoothingFactor *= 0.5f; // Reduce smoothing for rising signals
+        }
+
+        smoothedValue = smoothedValue * (1.0f - smoothingFactor) + currentValue * smoothingFactor;
+        magnitudes[i] = smoothedValue;
     }
 }
 

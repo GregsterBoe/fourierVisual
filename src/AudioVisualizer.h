@@ -50,6 +50,8 @@ private:
     int sampleRate;
     int bufferSize;
 
+    const float MIN_BAR_WIDTH = 2.0f;
+
     // Current audio features (all processed data comes from here)
     AudioFeatures currentFeatures;
 
@@ -76,4 +78,5 @@ private:
     // Helper functions for rendering
     ofColor getColorFromFrequency(float frequency);
     ofColor getColorFromAmplitude(float amplitude);
+    ofColor getSpectrumColor(float position);
 };

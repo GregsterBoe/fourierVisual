@@ -26,7 +26,6 @@ struct AudioFeatures {
     std::vector<float> fftMagnitudes;
     std::vector<float> fftBins;
     std::vector<float> smoothedSpectrum;     // Pre-smoothed spectrum
-    std::vector<float> spectrumBarHeights;   // Ready-to-render bar heights
     std::vector<glm::vec2> circularSpectrum; // Pre-calculated polar coordinates
 
     // Peak detection
@@ -52,11 +51,11 @@ struct AudioFeatures {
     float rotationAngle = 0.0f;     // For rotating visualizations
     ofColor currentColor;           // Pre-calculated color based on audio
 
-    std::vector<float> bassResponse;        // Detailed low-frequency bands
     std::vector<float> logFrequencyBands;   // Logarithmically spaced bands
     float bassEnergy = 0.0f;               // Overall bass energy
     float midEnergy = 0.0f;                // Mid-range energy
     float trebleEnergy = 0.0f;             // High-frequency energy
+
 
     // General
     float overallEnergy = 0.0f;
@@ -97,6 +96,8 @@ private:
     float maxObservedRMS = 0.001f;
     float adaptationRate = 0.001f;
     bool enableAutoScaling = true;
+    float runningMax = 0.0f;
+    float maxDecayRate = 0.99f;
 
     // frequency limits
     float lowFrequencyLimit = 250.0f;
@@ -138,19 +139,18 @@ private:
     float calculateRMS(const std::vector<float>& samples);
     
     // fft methods 
-    void performFFT(const std::vector<float>& input, std::vector<float>& magnitudes);
     void performFFTFast(const std::vector<float>& input, std::vector<float>& magnitudes);
     void performRealFFT(const std::vector<float>& input, std::vector<float>& magnitudes);
     void performFFTOptimal(const std::vector<float>& input, std::vector<float>& magnitudes);
     void cooleyTukeyFFT(std::vector<std::complex<float>>& data);
 
     // Frequency response enhancement methods
-    float applyFrequencyCompensation(float magnitude, float frequency);
-    float amplitudeToVisualizationScale(float magnitude, float frequency);
-    void applyFrequencyAwareSmoothing(std::vector<float>& magnitudes);
+    void enhanceFrequencySelectivity(std::vector<float>& magnitudes);
+
+    void applySelectiveSmoothing(std::vector<float>& magnitudes);
+
 
     // Enhanced frequency analysis
-    std::vector<float> getLowFrequencyBands(const std::vector<float>& magnitudes, int numBands = 4);
     std::vector<float> getLogFrequencyBands(const std::vector<float>& magnitudes, int numBands);
     void calculateFrequencyEnergies(AudioFeatures& features);
 

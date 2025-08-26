@@ -13,7 +13,7 @@ void ofApp::setup() {
     phase = 0.0;
     sampleRate = 44100;
     numSamples = 1024;
-    bufferSize = 2048;
+    bufferSize = 1024;
 
 
     // Setup visualizer
