@@ -121,26 +121,28 @@ void AudioVisualizer::drawSpectrumBars() {
     if (currentFeatures.fftMagnitudes.empty()) return;
 
     ofPushStyle();
-
     auto magnitudes = currentFeatures.logFrequencyBands;
     std::reverse(magnitudes.begin(), magnitudes.end());
+
     float initialBarWidth = visualParams.size.x / magnitudes.size();
     int groupSize = 1;
 
     // Calculate how many bins to group together to meet minimum width
     while (initialBarWidth * groupSize < MIN_BAR_WIDTH && groupSize < magnitudes.size()) {
-        groupSize *= 2; // Double the group size each iteration
+        groupSize *= 2;
     }
 
     // Calculate final parameters
     int numBars = magnitudes.size() / groupSize;
     float finalBarWidth = visualParams.size.x / numBars;
 
+    // Calculate dominant frequency position for visualization
+    float dominantFreqPosition = getDominantFrequencyPosition(currentFeatures.dominantFrequency, numBars);
+
     for (int i = 0; i < numBars; ++i) {
         // Accumulate neighboring heights
         float accumulatedHeight = 0.0f;
         int actualGroupSize = 0;
-
         for (int j = 0; j < groupSize && (i * groupSize + j) < magnitudes.size(); ++j) {
             accumulatedHeight += magnitudes[i * groupSize + j];
             actualGroupSize++;
@@ -150,19 +152,56 @@ void AudioVisualizer::drawSpectrumBars() {
         float height = (accumulatedHeight / actualGroupSize) * visualParams.sensitivity * visualParams.size.y;
 
         // Clean position-based color transition (0.0 = left, 1.0 = right)
-        float position = (float)i / (numBars - 1); // Normalize to [0,1]
+        float position = (float)i / (numBars - 1);
         ofColor barColor = getSpectrumColor(position);
 
-        ofSetColor(barColor);
+        // ENHANCEMENT 1: Highlight bars near dominant frequency
+        if (currentFeatures.melodyConfidence > 0.3f) { // Only if we're confident
+            float distanceFromDominant = abs(i - dominantFreqPosition);
+            if (distanceFromDominant <= 2.0f) { // Within 2 bars of dominant frequency
+                float proximityFactor = 1.0f - (distanceFromDominant / 2.0f);
+                // Boost brightness and add golden tint for dominant frequency area
+                barColor = barColor.lerp(ofColor::gold, proximityFactor * 0.6f);
+                barColor.setBrightness(barColor.getBrightness() * (1.0f + proximityFactor * 0.5f));
 
+                // ENHANCEMENT 2: Make dominant frequency bars taller
+                if (distanceFromDominant <= 1.0f) {
+                    height *= (1.0f + proximityFactor * currentFeatures.melodyConfidence * 0.3f);
+                }
+            }
+        }
+
+        ofSetColor(barColor);
         float x = visualParams.position.x + i * finalBarWidth;
         float y = visualParams.position.y + visualParams.size.y - height;
-
         ofDrawRectangle(x, y, finalBarWidth - 1, height);
     }
 
     ofPopStyle();
 }
+
+// Helper function to convert frequency to bar position
+float AudioVisualizer::getDominantFrequencyPosition(float frequency, int numBars) {
+    if (frequency <= 0) return -1;
+
+    // Assuming your frequency bands are logarithmically spaced
+    // You'll need to adapt this to match your actual frequency mapping
+    float minFreq = 20.0f;   // Lowest frequency in your spectrum
+    float maxFreq = 20000.0f; // Highest frequency in your spectrum
+
+    // Logarithmic mapping to match your log frequency bands
+    float logFreq = log(frequency);
+    float logMin = log(minFreq);
+    float logMax = log(maxFreq);
+
+    float normalizedPosition = (logFreq - logMin) / (logMax - logMin);
+
+    // Since you reverse the magnitudes, we need to reverse the position too
+    normalizedPosition = 1.0f - normalizedPosition;
+
+    return normalizedPosition * (numBars - 1);
+}
+
 
 void AudioVisualizer::drawCircularSpectrum() {
     if (currentFeatures.circularSpectrum.empty()) return;

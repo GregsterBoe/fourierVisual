@@ -6,6 +6,59 @@
 #include <complex>
 #include <cmath>
 
+
+// Simplified structures - remove rhythm/accent complexity
+struct MelodyRange {
+    float start;
+    float end;
+    float centroid;
+    float energy;
+    float confidence;
+
+    MelodyRange() : start(0), end(0), centroid(0), energy(0), confidence(0) {}
+    MelodyRange(float s, float e, float c, float en) : start(s), end(e), centroid(c), energy(en), confidence(0) {}
+};
+
+class MelodyTracker {
+private:
+    // Configuration for note detection
+    float adaptationRate = 0.25f;        // Fast adaptation for note changes
+    float energyThreshold = 0.02f;       // Lower threshold for subtle notes
+    float confidenceDecay = 0.92f;       // Faster decay to track note changes
+    float minConfidence = 0.2f;          // Lower confidence threshold
+
+    // Melody frequency bounds (where most musical notes occur)
+    float melodyMin = 80.0f;             // Around low E2 (guitar)
+    float melodyMax = 4000.0f;           // Above high soprano range
+
+    // State
+    MelodyRange currentRange;
+    std::vector<float> energyHistory;
+    std::vector<float> previousBands;    // For smoothing
+    int historyFrames = 10;              // Shorter history for note tracking
+
+    // Helper methods
+    float calculateMelodyCentroid(const std::vector<float>& magnitudes, float binWidth);
+    float calculateMelodyEnergy(const std::vector<float>& magnitudes, float binWidth);
+    void updateMelodyRange(const std::vector<float>& magnitudes, float binWidth);
+    std::pair<float, float> findMelodyPeaks(const std::vector<float>& magnitudes, float binWidth);
+
+public:
+    MelodyTracker() {
+        energyHistory.reserve(historyFrames);
+        reset();
+    }
+
+    void reset();
+    void updateRange(const std::vector<float>& magnitudes, float sampleRate);
+    std::vector<float> getMelodyBands(const std::vector<float>& magnitudes, float sampleRate, int numBands);
+    std::pair<float, float> getCurrentMelodyRange() const;
+    float getDominantFrequency() const { return currentRange.centroid; }
+    float getMelodyConfidence() const { return currentRange.confidence; }
+
+    void setAdaptationRate(float rate) { adaptationRate = std::max(0.01f, std::min(1.0f, rate)); }
+};
+
 enum class VisualizationMode {
     WAVE_RMS,           // Raw waveform display
     SPECTRUM_BARS,      // FFT spectrum as bars
@@ -59,12 +112,19 @@ struct AudioFeatures {
 
     // General
     float overallEnergy = 0.0f;
+
+    // Simplified melody tracking
+    float dominantFrequency = 0.0f;     // The detected note frequency
+    float melodyConfidence = 0.0f;      // How confident we are about the note
+    std::pair<float, float> melodyRange = { 0.0f, 0.0f }; // Current tracking range
 };
 
 class AudioAnalyzer {
 public:
     AudioAnalyzer();
     ~AudioAnalyzer();
+    bool enableMelodyTracking = false;
+
 
     void setup(int sampleRate, int bufferSize);
 
@@ -86,6 +146,27 @@ public:
 
     // Visualization synchronization
     void setVisualizationSize(glm::vec2 size) { visualizationSize = size; }
+
+
+    void resetMelodyTracking() {
+        melodyTracker.reset();
+    }
+
+    std::pair<float, float> getCurrentMelodyRange() const {
+        return melodyTracker.getCurrentMelodyRange();
+    }
+
+    float getDominantMelodyFrequency() const {
+        return melodyTracker.getDominantFrequency();
+    }
+
+    float getMelodyConfidence() const {
+        return melodyTracker.getMelodyConfidence();
+    }
+
+    void setMelodyAdaptationRate(float rate) {
+        melodyTracker.setAdaptationRate(rate);
+    }
 
 private:
     // Basic settings
@@ -164,4 +245,6 @@ private:
     std::vector<float> downsampleForVisualization(const std::vector<float>& input, int targetSize);
     ofColor getColorFromFrequency(float freq);
     ofColor getColorFromAmplitude(float amplitude);
+
+    MelodyTracker melodyTracker;
 };

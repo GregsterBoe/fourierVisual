@@ -70,7 +70,17 @@ AudioFeatures AudioAnalyzer::analyze(const std::vector<float>&leftChannel,
         features.fftBins[i] = (float)i * sampleRate / (2.0f * features.fftMagnitudes.size());
     }
 
-    features.logFrequencyBands = getLogFrequencyBands(features.fftMagnitudes, bufferSize);
+    if (enableMelodyTracking) {
+        melodyTracker.updateRange(features.fftMagnitudes, sampleRate);
+        features.logFrequencyBands = getLogFrequencyBands(features.fftMagnitudes, bufferSize);
+        features.dominantFrequency = melodyTracker.getDominantFrequency();
+        features.melodyConfidence = melodyTracker.getMelodyConfidence();
+        features.melodyRange = melodyTracker.getCurrentMelodyRange();
+    }
+    else {
+        features.logFrequencyBands = getLogFrequencyBands(features.fftMagnitudes, bufferSize);
+
+    }
 
     // Update running maximum
     float currentMax = *std::max_element(features.logFrequencyBands.begin(), features.logFrequencyBands.end());
@@ -542,4 +552,253 @@ bool AudioAnalyzer::detectOnset(const std::vector<float>& currentSpectrum,
     }
 
     return spectralDifference > onsetThreshold;
+}
+
+void MelodyTracker::reset() {
+    // Default to common vocal/instrument range
+    currentRange = MelodyRange(200.0f, 1500.0f, 440.0f, 0.0f); // A4 as default centroid
+    energyHistory.clear();
+    previousBands.clear();
+}
+
+void MelodyTracker::updateRange(const std::vector<float>& magnitudes, float sampleRate) {
+    if (magnitudes.empty()) return;
+
+    float binWidth = sampleRate / (magnitudes.size() * 2);
+
+    // Calculate total energy in melody range for normalization
+    float totalMelodyEnergy = calculateMelodyEnergy(magnitudes, binWidth);
+
+    if (totalMelodyEnergy < energyThreshold) {
+        // Very quiet, decay confidence but keep range
+        currentRange.confidence *= confidenceDecay;
+        return;
+    }
+
+    // Store energy history
+    energyHistory.push_back(totalMelodyEnergy);
+    if (energyHistory.size() > historyFrames) {
+        energyHistory.erase(energyHistory.begin());
+    }
+
+    // Update melody range based on current spectrum
+    //updateMelodyRange(magnitudes, binWidth);
+}
+
+float MelodyTracker::calculateMelodyCentroid(const std::vector<float>& magnitudes, float binWidth) {
+    float weightedSum = 0.0f;
+    float magnitudeSum = 0.0f;
+
+    int startBin = std::max(1, (int)(melodyMin / binWidth));
+    int endBin = std::min((int)magnitudes.size() - 1, (int)(melodyMax / binWidth));
+
+    // Focus on the most prominent frequencies (peak detection approach)
+    for (int i = startBin; i <= endBin; i++) {
+        float frequency = i * binWidth;
+        float magnitude = magnitudes[i];
+
+        // Emphasize peaks for better note detection
+        if (i > 0 && i < magnitudes.size() - 1) {
+            // Only consider local maxima and strong signals
+            bool isLocalMax = magnitude > magnitudes[i - 1] && magnitude > magnitudes[i + 1];
+            if (isLocalMax && magnitude > energyThreshold * 2.0f) {
+                // Weight peaks more heavily
+                magnitude *= 3.0f;
+            }
+        }
+
+        weightedSum += frequency * magnitude;
+        magnitudeSum += magnitude;
+    }
+
+    return (magnitudeSum > 0.0f) ? weightedSum / magnitudeSum : currentRange.centroid;
+}
+
+float MelodyTracker::calculateMelodyEnergy(const std::vector<float>& magnitudes, float binWidth) {
+    float energy = 0.0f;
+    int count = 0;
+
+    int startBin = std::max(1, (int)(melodyMin / binWidth));
+    int endBin = std::min((int)magnitudes.size() - 1, (int)(melodyMax / binWidth));
+
+    for (int i = startBin; i <= endBin; i++) {
+        energy += magnitudes[i];
+        count++;
+    }
+
+    return count > 0 ? energy / count : 0.0f;
+}
+
+std::pair<float, float> MelodyTracker::findMelodyPeaks(const std::vector<float>& magnitudes, float binWidth) {
+    float primaryPeak = 0.0f;
+    float secondaryPeak = 0.0f;
+    float primaryFreq = currentRange.centroid;
+    float secondaryFreq = currentRange.centroid;
+
+    int startBin = std::max(1, (int)(melodyMin / binWidth));
+    int endBin = std::min((int)magnitudes.size() - 1, (int)(melodyMax / binWidth));
+
+    // Find the two strongest peaks
+    for (int i = startBin + 1; i < endBin - 1; i++) {
+        float frequency = i * binWidth;
+        float magnitude = magnitudes[i];
+
+        // Check if this is a local maximum
+        if (magnitude > magnitudes[i - 1] && magnitude > magnitudes[i + 1] &&
+            magnitude > energyThreshold) {
+
+            if (magnitude > primaryPeak) {
+                // New primary peak
+                secondaryPeak = primaryPeak;
+                secondaryFreq = primaryFreq;
+                primaryPeak = magnitude;
+                primaryFreq = frequency;
+            }
+            else if (magnitude > secondaryPeak) {
+                // New secondary peak
+                secondaryPeak = magnitude;
+                secondaryFreq = frequency;
+            }
+        }
+    }
+
+    return { primaryFreq, secondaryFreq };
+}
+
+void MelodyTracker::updateMelodyRange(const std::vector<float>& magnitudes, float binWidth) {
+    // Calculate new centroid with peak emphasis
+    float newCentroid = calculateMelodyCentroid(magnitudes, binWidth);
+    float newEnergy = calculateMelodyEnergy(magnitudes, binWidth);
+
+    // Find melody peaks for better note detection
+    auto peaks = findMelodyPeaks(magnitudes, binWidth);
+    float dominantFreq = peaks.first;
+
+    if (newEnergy > energyThreshold) {
+        // Use the dominant peak if it's strong enough
+        if (dominantFreq > 0) {
+            newCentroid = dominantFreq;
+        }
+
+        // Fast adaptation for note changes
+        if (currentRange.confidence > minConfidence) {
+            currentRange.centroid = currentRange.centroid * (1.0f - adaptationRate) + newCentroid * adaptationRate;
+        }
+        else {
+            // Low confidence, accept new centroid quickly
+            currentRange.centroid = currentRange.centroid * 0.3f + newCentroid * 0.7f;
+        }
+
+        // Update range boundaries around the centroid
+        // Narrow range for better note resolution
+        float rangeWidth = 400.0f; // Fixed 400Hz window around dominant frequency
+        currentRange.start = std::max(melodyMin, currentRange.centroid - rangeWidth * 0.5f);
+        currentRange.end = std::min(melodyMax, currentRange.centroid + rangeWidth * 0.5f);
+
+        // Update energy
+        currentRange.energy = currentRange.energy * (1.0f - adaptationRate) + newEnergy * adaptationRate;
+
+        // Increase confidence quickly for strong signals
+        currentRange.confidence = std::min(1.0f, currentRange.confidence + adaptationRate * 3.0f);
+    }
+    else {
+        // Low energy, decay confidence
+        currentRange.confidence *= confidenceDecay;
+        currentRange.energy *= 0.9f;
+    }
+}
+
+std::vector<float> MelodyTracker::getMelodyBands(const std::vector<float>& magnitudes, float sampleRate, int numBands) {
+    std::vector<float> bands(numBands, 0.0f);
+
+    if (magnitudes.empty()) {
+        return bands;
+    }
+
+    float binWidth = sampleRate / (magnitudes.size() * 2);
+
+    // Determine active melody range
+    float rangeStart, rangeEnd;
+
+    if (currentRange.confidence > minConfidence) {
+        rangeStart = currentRange.start;
+        rangeEnd = currentRange.end;
+    }
+    else {
+        // Fallback to common melody range
+        rangeStart = 200.0f;
+        rangeEnd = 2000.0f;
+    }
+
+    // Ensure minimum useful range
+    float minRangeWidth = 300.0f;
+    if (rangeEnd - rangeStart < minRangeWidth) {
+        float center = (rangeStart + rangeEnd) * 0.5f;
+        rangeStart = center - minRangeWidth * 0.5f;
+        rangeEnd = center + minRangeWidth * 0.5f;
+    }
+
+    // Create high-resolution frequency bands
+    float rangeWidth = rangeEnd - rangeStart;
+    float bandWidth = rangeWidth / numBands;
+
+    for (int i = 0; i < numBands; i++) {
+        float freqStart = rangeStart + i * bandWidth;
+        float freqEnd = rangeStart + (i + 1) * bandWidth;
+
+        int startBin = std::max(1, (int)(freqStart / binWidth));
+        int endBin = std::min((int)magnitudes.size() - 1, (int)(freqEnd / binWidth));
+
+        if (startBin <= endBin) {
+            float energy = 0.0f;
+            float peakEnergy = 0.0f;
+            int count = 0;
+
+            for (int bin = startBin; bin <= endBin; bin++) {
+                float magnitude = magnitudes[bin];
+
+                // Linear aggregation for melody
+                energy += magnitude;
+
+                // Detect peaks within this band for note clarity
+                if (bin > 0 && bin < magnitudes.size() - 1) {
+                    if (magnitude > magnitudes[bin - 1] && magnitude > magnitudes[bin + 1]) {
+                        peakEnergy = std::max(peakEnergy, magnitude);
+                    }
+                }
+
+                count++;
+            }
+
+            if (count > 0) {
+                float baseEnergy = energy / count;
+
+                // Emphasize bands with peaks (likely notes)
+                float finalEnergy = baseEnergy;
+                if (peakEnergy > energyThreshold) {
+                    finalEnergy = baseEnergy + peakEnergy * 0.5f; // 50% peak boost
+                }
+
+                bands[i] = finalEnergy;
+            }
+        }
+    }
+
+    // Light smoothing for stability (less than before for note tracking)
+    if (previousBands.size() == numBands) {
+        float smoothing = 0.08f; // Very light smoothing
+        for (int i = 0; i < numBands; i++) {
+            bands[i] = previousBands[i] * (1.0f - smoothing) + bands[i] * smoothing;
+        }
+    }
+
+    previousBands = bands;
+    return bands;
+}
+
+std::pair<float, float> MelodyTracker::getCurrentMelodyRange() const {
+    if (currentRange.confidence > minConfidence) {
+        return { currentRange.start, currentRange.end };
+    }
+    return { 200.0f, 2000.0f }; // Default range
 }

@@ -54,6 +54,9 @@ void ofApp::setup() {
     // initialize audio analysis
     audioAnalyzer = std::make_unique<AudioAnalyzer>();
     audioAnalyzer->setup(sampleRate, bufferSize);
+
+    audioAnalyzer->enableMelodyTracking = true;
+    audioAnalyzer->setMelodyAdaptationRate(0.3f);
 }
 
 //--------------------------------------------------------------
@@ -86,8 +89,8 @@ void ofApp::update() {
         visualizer->update(currentFeatures);
     } 
 
-    // Update phase for animation
-    phase += 0.1;
+    float noteFreq = currentFeatures.dominantFrequency;
+    float confidence = currentFeatures.melodyConfidence;
 }
 
 void ofApp::draw() {

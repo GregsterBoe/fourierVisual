@@ -71,6 +71,7 @@ private:
     void drawCentroidWave();
     void drawOnsetParticles();
     void drawCombinedView();
+    float getDominantFrequencyPosition(float frequency, int numBars);
 
     // Particle management (only remaining update logic)
     void updateParticles(bool addNew);
